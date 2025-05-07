@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
+
+const CRLF = "\r\n"
 
 type Server struct {
 	listener net.Listener
@@ -20,7 +23,24 @@ func (s *Server) Start() {
 	defer s.Close()
 	conn := s.Accept()
 	fmt.Println("Accepted connection from: ", conn.RemoteAddr())
-	conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		fmt.Println("Error accepting connection: ", err)
+	}
+
+	req := string(buf[:n])
+	lines := strings.Split(req, CRLF)
+	path := strings.Split(lines[0], " ")[1]
+	var res string
+	if path == "/" {
+		res = "HTTP/1.1 200 OK\r\n\r\n"
+	} else {
+		res = "HTTP/1.1 404 Not Found\r\n\r\n"
+	}
+	conn.Write([]byte(res))
+
 }
 
 func (s *Server) Listen() {
