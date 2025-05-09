@@ -10,7 +10,9 @@ func main() {
 	s.Listen()
 	defer s.Close()
 
-	conn := s.Accept()
-	s.HandleConnection(conn)
+	for {
+		conn := s.Accept()
+		go s.HandleConnection(conn)
+	}
 
 }
