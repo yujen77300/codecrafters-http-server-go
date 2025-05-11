@@ -8,10 +8,13 @@ import (
 
 type Server struct {
 	listener net.Listener
+	fileDirctory string
 }
 
-func NewServer() *Server {
-	return &Server{}
+func NewServer(fileDirctory string) *Server {
+	return &Server{
+		fileDirctory: fileDirctory,
+	}
 }
 
 func (s *Server) Listen() {

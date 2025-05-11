@@ -3,6 +3,8 @@ package server
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -36,16 +38,17 @@ func (s *Server) HandleConnection(conn net.Conn) {
 
 	path := reqStatusLine[1]
 
-	fmt.Println("Request path: ", path)
-
 	if path == "/" {
 		handleRootPath(conn)
 	} else if strings.HasPrefix(path, "/echo/") {
 		echoStr := strings.TrimPrefix(path, "/echo/")
 		handleEchoPath(conn, echoStr)
-	} else if path == "/user-agent"{
+	} else if path == "/user-agent" {
 		handleUserAgent(conn, lines)
-	}else{
+	} else if strings.HasPrefix(path, "/files/") {
+		fileName := strings.TrimPrefix(path, "/files/")
+		s.handleFilesPath(conn, fileName)
+	} else {
 		handleNotFound(conn)
 	}
 }
@@ -82,30 +85,61 @@ func handleEchoPath(conn net.Conn, content string) {
 	fmt.Printf("Echo response sent: %s\n", content)
 }
 
-
 func handleUserAgent(conn net.Conn, lines []string) {
-    userAgent := ""
-    for _, line := range lines {
-        if strings.HasPrefix(line, "User-Agent:") {
-            userAgent = strings.TrimPrefix(line, "User-Agent: ")
-            break
-        }
-    }
+	userAgent := ""
+	for _, line := range lines {
+		if strings.HasPrefix(line, "User-Agent:") {
+			userAgent = strings.TrimPrefix(line, "User-Agent: ")
+			break
+		}
+	}
 
-    if userAgent == "" {
-        handleBadRequest(conn)
-        return
-    }
+	if userAgent == "" {
+		handleBadRequest(conn)
+		return
+	}
 
-    statusLine := "HTTP/1.1 200 OK\r\n"
+	statusLine := "HTTP/1.1 200 OK\r\n"
 
-    contentLength := len(userAgent)
-    headers := fmt.Sprintf("Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n", contentLength)
+	contentLength := len(userAgent)
+	headers := fmt.Sprintf("Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n", contentLength)
 
-    body := userAgent
+	body := userAgent
 
-    response := statusLine + headers + body
-    conn.Write([]byte(response))
+	response := statusLine + headers + body
+	conn.Write([]byte(response))
 
-    fmt.Printf("User-Agent response sent: %s\n", userAgent)
+	fmt.Printf("User-Agent response sent: %s\n", userAgent)
+}
+
+func (s *Server) handleFilesPath(conn net.Conn, fileName string) {
+	filePath := filepath.Join(s.fileDirctory, fileName)
+
+	_, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			handleNotFound(conn)
+		} else {
+			fmt.Printf("Error checking file: %v\n", err)
+			handleBadRequest(conn)
+		}
+		return
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Printf("Error reading file: %v\n", err)
+		handleBadRequest(conn)
+		return
+	}
+
+	statusLine := "HTTP/1.1 200 OK\r\n"
+
+	contentLength := len(content)
+	headers := fmt.Sprintf("Content-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n", contentLength)
+
+	response := statusLine + headers + string(content)
+	conn.Write([]byte(response))
+
+	fmt.Printf("File response sent: %s (%d bytes)\n", fileName, contentLength)
 }
