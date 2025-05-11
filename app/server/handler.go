@@ -23,7 +23,6 @@ func (s *Server) HandleConnection(conn net.Conn) {
 
 	req := string(buf[:n])
 	lines := strings.Split(req, CRLF)
-
 	if len(lines) == 0 {
 		handleBadRequest(conn)
 		return
@@ -38,19 +37,41 @@ func (s *Server) HandleConnection(conn net.Conn) {
 
 	path := reqStatusLine[1]
 
-	if path == "/" {
-		handleRootPath(conn)
-	} else if strings.HasPrefix(path, "/echo/") {
-		echoStr := strings.TrimPrefix(path, "/echo/")
-		handleEchoPath(conn, echoStr)
-	} else if path == "/user-agent" {
-		handleUserAgent(conn, lines)
-	} else if strings.HasPrefix(path, "/files/") {
-		fileName := strings.TrimPrefix(path, "/files/")
-		s.handleFilesPath(conn, fileName)
-	} else {
-		handleNotFound(conn)
+	switch reqStatusLine[0] {
+	case "GET":
+		if path == "/" {
+			handleRootPath(conn)
+		} else if strings.HasPrefix(path, "/echo/") {
+			echoStr := strings.TrimPrefix(path, "/echo/")
+			handleEchoPath(conn, echoStr)
+		} else if path == "/user-agent" {
+			handleUserAgent(conn, lines)
+		} else if strings.HasPrefix(path, "/files/") {
+			fileName := strings.TrimPrefix(path, "/files/")
+			s.handleFilesPath(conn, fileName)
+		} else {
+			handleNotFound(conn)
+		}
+	case "POST":
+		if strings.HasPrefix(path, "/files/") {
+			// Find the position where headers end and body begins (marked by two consecutive CRLFs)
+			bodyStart := strings.Index(req, CRLF+CRLF) + 4
+
+			requestBody := ""
+			// Check if there's any content after headers
+			if bodyStart < len(req) {
+				requestBody = req[bodyStart:]
+			}
+			fmt.Println("Request body: ", requestBody)
+			fileName := strings.TrimPrefix(path, "/files/")
+			fmt.Printf("POST request for file: %s with body length: %d\n", fileName, len(requestBody))
+			s.handlePostFilePath(conn, fileName, requestBody)
+		} else {
+			handleNotFound(conn)
+		}
+
 	}
+
 }
 
 func handleBadRequest(conn net.Conn) {
@@ -142,4 +163,20 @@ func (s *Server) handleFilesPath(conn net.Conn, fileName string) {
 	conn.Write([]byte(response))
 
 	fmt.Printf("File response sent: %s (%d bytes)\n", fileName, contentLength)
+}
+
+func (s *Server) handlePostFilePath(conn net.Conn, fileName string, requestBody string) {
+	filePath := filepath.Join(s.fileDirctory, fileName)
+
+	err := os.WriteFile(filePath, []byte(requestBody), 0644)
+	if err != nil {
+		fmt.Printf("Error writing to file: %v\n", err)
+		handleBadRequest(conn)
+		return
+	}
+
+	statusLine := "HTTP/1.1 201 Created\r\n\r\n"
+	conn.Write([]byte(statusLine))
+
+	fmt.Printf("File created: %s (%d bytes)\n", fileName, len(requestBody))
 }
