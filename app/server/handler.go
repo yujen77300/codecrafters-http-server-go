@@ -5,10 +5,26 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const CRLF = "\r\n"
+
+type HttpRequest struct {
+	Method  string
+	URL     string
+	Version string
+	Headers map[string]string
+	Body    string
+}
+
+type HttpResponse struct {
+	Status  int
+	Version string
+	Headers map[string]string
+	Body    []byte
+}
 
 func (s *Server) HandleConnection(conn net.Conn) {
 	defer conn.Close()
@@ -21,162 +37,174 @@ func (s *Server) HandleConnection(conn net.Conn) {
 		return
 	}
 
-	req := string(buf[:n])
+	httpReq := parseRequest(buf[:n])
+
+	response := s.route(httpReq)
+
+	encResponse := response.Encode()
+
+	conn.Write(encResponse)
+
+}
+
+func parseRequest(bs []byte) *HttpRequest {
+	req := string(bs)
 	lines := strings.Split(req, CRLF)
 	if len(lines) == 0 {
-		handleBadRequest(conn)
-		return
+		return nil
 	}
 
 	reqStatusLine := strings.Split(lines[0], " ")
-	if len(reqStatusLine) < 2 {
-		handleBadRequest(conn)
-		return
-	}
-	fmt.Println("Request line: ", reqStatusLine[0], reqStatusLine[1], reqStatusLine[2])
-
-	path := reqStatusLine[1]
-
-	switch reqStatusLine[0] {
-	case "GET":
-		if path == "/" {
-			handleRootPath(conn)
-		} else if strings.HasPrefix(path, "/echo/") {
-			echoStr := strings.TrimPrefix(path, "/echo/")
-			handleEchoPath(conn, echoStr)
-		} else if path == "/user-agent" {
-			handleUserAgent(conn, lines)
-		} else if strings.HasPrefix(path, "/files/") {
-			fileName := strings.TrimPrefix(path, "/files/")
-			s.handleFilesPath(conn, fileName)
-		} else {
-			handleNotFound(conn)
-		}
-	case "POST":
-		if strings.HasPrefix(path, "/files/") {
-			// Find the position where headers end and body begins (marked by two consecutive CRLFs)
-			bodyStart := strings.Index(req, CRLF+CRLF) + 4
-
-			requestBody := ""
-			// Check if there's any content after headers
-			if bodyStart < len(req) {
-				requestBody = req[bodyStart:]
-			}
-			fmt.Println("Request body: ", requestBody)
-			fileName := strings.TrimPrefix(path, "/files/")
-			fmt.Printf("POST request for file: %s with body length: %d\n", fileName, len(requestBody))
-			s.handlePostFilePath(conn, fileName, requestBody)
-		} else {
-			handleNotFound(conn)
-		}
-
+	if len(reqStatusLine) < 3 {
+		return nil
 	}
 
-}
-
-func handleBadRequest(conn net.Conn) {
-	res := "HTTP/1.1 400 Bad Request\r\n\r\n"
-	conn.Write([]byte(res))
-}
-
-func handleRootPath(conn net.Conn) {
-	res := "HTTP/1.1 200 OK\r\n\r\n"
-	conn.Write([]byte(res))
-}
-
-func handleNotFound(conn net.Conn) {
-	res := "HTTP/1.1 404 Not Found\r\n\r\n"
-	conn.Write([]byte(res))
-}
-
-func handleEchoPath(conn net.Conn, content string) {
-	// Status line
-	statusLine := "HTTP/1.1 200 OK\r\n"
-
-	// Headers
-	contentLength := len(content)
-	headers := fmt.Sprintf("Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n", contentLength)
-
-	// Response body
-	body := content
-
-	response := statusLine + headers + body
-	conn.Write([]byte(response))
-
-	fmt.Printf("Echo response sent: %s\n", content)
-}
-
-func handleUserAgent(conn net.Conn, lines []string) {
-	userAgent := ""
-	for _, line := range lines {
-		if strings.HasPrefix(line, "User-Agent:") {
-			userAgent = strings.TrimPrefix(line, "User-Agent: ")
+	headers := make(map[string]string)
+	headerEnd := 0
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "" {
+			headerEnd = i
 			break
 		}
+
+		parts := strings.SplitN(lines[i], ": ", 2)
+		if len(parts) == 2 {
+			headers[parts[0]] = parts[1]
+		}
 	}
 
-	if userAgent == "" {
-		handleBadRequest(conn)
-		return
+	body := ""
+	if headerEnd+1 < len(lines) {
+		body = strings.Join(lines[headerEnd+1:], CRLF)
 	}
 
-	statusLine := "HTTP/1.1 200 OK\r\n"
-
-	contentLength := len(userAgent)
-	headers := fmt.Sprintf("Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n", contentLength)
-
-	body := userAgent
-
-	response := statusLine + headers + body
-	conn.Write([]byte(response))
-
-	fmt.Printf("User-Agent response sent: %s\n", userAgent)
+	return &HttpRequest{
+		Method:  reqStatusLine[0],
+		URL:     reqStatusLine[1],
+		Version: reqStatusLine[2],
+		Headers: headers,
+		Body:    body,
+	}
 }
 
-func (s *Server) handleFilesPath(conn net.Conn, fileName string) {
+func (s *Server) route(req *HttpRequest) *HttpResponse {
+	if req == nil {
+		return buildResponse(400, "HTTP/1.1")
+	}
+
+	if req.URL == "/" {
+		return buildResponse(200, req.Version)
+	} else if strings.HasPrefix(req.URL, "/echo/") {
+		echoStr := strings.TrimPrefix(req.URL, "/echo/")
+		return buildResponseWithBody(200, req.Version, []byte(echoStr), "text/plain")
+	} else if req.URL == "/user-agent" {
+		userAgent, exists := req.Headers["User-Agent"]
+		if !exists {
+			return buildResponse(400, req.Version)
+		}
+		return buildResponseWithBody(200, req.Version, []byte(userAgent), "text/plain")
+	} else if strings.HasPrefix(req.URL, "/files/") {
+		fileName := strings.TrimPrefix(req.URL, "/files/")
+
+		if req.Method == "GET" {
+			return s.handleGetFile(fileName, req.Version)
+		} else if req.Method == "POST" {
+			return s.handlePostFile(fileName, req.Body, req.Version)
+		}
+	}
+
+	return buildResponse(404, req.Version)
+}
+
+func buildResponse(status int, version string) *HttpResponse {
+	return &HttpResponse{
+		Status:  status,
+		Version: version,
+		Headers: make(map[string]string),
+		Body:    []byte(""),
+	}
+}
+
+func buildResponseWithBody(status int, version string, body []byte, contentType string) *HttpResponse {
+	headers := make(map[string]string)
+	headers["Content-Type"] = contentType
+	headers["Content-Length"] = strconv.Itoa(len(body))
+
+	return &HttpResponse{
+		Status:  status,
+		Version: version,
+		Headers: headers,
+		Body:    body,
+	}
+}
+
+func (s *Server) handleGetFile(fileName string, version string) *HttpResponse {
 	filePath := filepath.Join(s.fileDirctory, fileName)
 
 	_, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			handleNotFound(conn)
+			return buildResponse(404, version)
 		} else {
 			fmt.Printf("Error checking file: %v\n", err)
-			handleBadRequest(conn)
+			return buildResponse(400, version)
 		}
-		return
 	}
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		fmt.Printf("Error reading file: %v\n", err)
-		handleBadRequest(conn)
-		return
+		return buildResponse(400, version)
 	}
 
-	statusLine := "HTTP/1.1 200 OK\r\n"
-
-	contentLength := len(content)
-	headers := fmt.Sprintf("Content-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n", contentLength)
-
-	response := statusLine + headers + string(content)
-	conn.Write([]byte(response))
-
-	fmt.Printf("File response sent: %s (%d bytes)\n", fileName, contentLength)
+	fmt.Printf("File response sent: %s (%d bytes)\n", fileName, len(content))
+	return buildResponseWithBody(200, version, content, "application/octet-stream")
 }
 
-func (s *Server) handlePostFilePath(conn net.Conn, fileName string, requestBody string) {
+func (s *Server) handlePostFile(fileName string, requestBody string, version string) *HttpResponse {
 	filePath := filepath.Join(s.fileDirctory, fileName)
 
 	err := os.WriteFile(filePath, []byte(requestBody), 0644)
 	if err != nil {
 		fmt.Printf("Error writing to file: %v\n", err)
-		handleBadRequest(conn)
-		return
+		return buildResponse(400, version)
 	}
 
-	statusLine := "HTTP/1.1 201 Created\r\n\r\n"
-	conn.Write([]byte(statusLine))
-
 	fmt.Printf("File created: %s (%d bytes)\n", fileName, len(requestBody))
+	return buildResponse(201, version)
+}
+
+func (r *HttpResponse) Encode() []byte {
+	response := make([]byte, 0)
+
+	statusText := getStatusText(r.Status)
+	statusLine := fmt.Sprintf("%s %d %s\r\n", r.Version, r.Status, statusText)
+	response = append(response, statusLine...)
+
+	for k, v := range r.Headers {
+		headerLine := fmt.Sprintf("%s: %s\r\n", k, v)
+		response = append(response, headerLine...)
+	}
+
+	// headers 和 body 之間的空行
+	response = append(response, "\r\n"...)
+
+	response = append(response, r.Body...)
+
+	return response
+}
+
+func getStatusText(status int) string {
+	switch status {
+	case 200:
+		return "OK"
+	case 201:
+		return "Created"
+	case 400:
+		return "Bad Request"
+	case 404:
+		return "Not Found"
+	default:
+		return ""
+	}
 }
