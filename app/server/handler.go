@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -41,7 +42,13 @@ func (s *Server) HandleConnection(conn net.Conn) {
 		buf := make([]byte, 1024)
 		n, err := conn.Read(buf)
 		if err != nil {
-			fmt.Println("Error reading connection: ", err)
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				fmt.Println("Connection timed out")
+			} else if err == io.EOF {
+				fmt.Println("Client closed connection")
+			} else {
+				fmt.Println("Error reading connection: ", err)
+			}
 			return
 		}
 
@@ -57,7 +64,8 @@ func (s *Server) HandleConnection(conn net.Conn) {
 			return
 		}
 
-		if connection, exists := httpReq.Headers["Connection"]; exists && connection == "close" {
+		if connection, exists := httpReq.Headers["Connection"]; exists &&
+			strings.ToLower(connection) == "close" {
 			fmt.Println("Closing connection as per request header")
 			return
 		}
