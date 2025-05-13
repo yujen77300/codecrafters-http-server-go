@@ -56,6 +56,15 @@ func (s *Server) HandleConnection(conn net.Conn) {
 
 		response := s.route(httpReq)
 
+		if connection, exists := httpReq.Headers["Connection"]; exists &&
+			strings.ToLower(connection) == "close" {
+			if response.Headers == nil {
+				response.Headers = make(map[string]string)
+			}
+			response.Headers["Connection"] = "close"
+			fmt.Println("Closing connection as per request header")
+		}
+
 		encResponse := response.Encode()
 
 		_, err = conn.Write(encResponse)
@@ -66,7 +75,6 @@ func (s *Server) HandleConnection(conn net.Conn) {
 
 		if connection, exists := httpReq.Headers["Connection"]; exists &&
 			strings.ToLower(connection) == "close" {
-			fmt.Println("Closing connection as per request header")
 			return
 		}
 	}
