@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const CRLF = "\r\n"
@@ -30,20 +31,37 @@ func (s *Server) HandleConnection(conn net.Conn) {
 	defer conn.Close()
 	fmt.Println("Accepted connection from: ", conn.RemoteAddr())
 
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		fmt.Println("Error reading connection: ", err)
-		return
+	for {
+		err := conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		if err != nil {
+			fmt.Println("Error setting read deadline: ", err)
+			return
+		}
+
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			fmt.Println("Error reading connection: ", err)
+			return
+		}
+
+		httpReq := parseRequest(buf[:n])
+
+		response := s.route(httpReq)
+
+		encResponse := response.Encode()
+
+		_, err = conn.Write(encResponse)
+		if err != nil {
+			fmt.Println("Error writing response: ", err)
+			return
+		}
+
+		if connection, exists := httpReq.Headers["Connection"]; exists && connection == "close" {
+			fmt.Println("Closing connection as per request header")
+			return
+		}
 	}
-
-	httpReq := parseRequest(buf[:n])
-
-	response := s.route(httpReq)
-
-	encResponse := response.Encode()
-
-	conn.Write(encResponse)
 
 }
 
