@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net"
@@ -180,16 +182,34 @@ func buildResponse(status int, version string) *HttpResponse {
 func buildResponseWithBody(status int, version string, body []byte, contentType string, acceptEncoding string) *HttpResponse {
 	headers := make(map[string]string)
 	headers["Content-Type"] = contentType
-	headers["Content-Length"] = strconv.Itoa(len(body))
+
+	finalBody := body
+
 	if acceptEncoding != "" && strings.Contains(strings.ToLower(acceptEncoding), "gzip") {
-		headers["Content-Encoding"] = "gzip"
+		var buf bytes.Buffer
+		gzipWriter := gzip.NewWriter(&buf)
+
+		_, err := gzipWriter.Write(body)
+		if err != nil {
+			fmt.Println("Error compressing content:", err)
+		} else {
+			err = gzipWriter.Close()
+			if err != nil {
+				fmt.Println("Error closing gzip writer:", err)
+			} else {
+				finalBody = buf.Bytes()
+				headers["Content-Encoding"] = "gzip"
+			}
+		}
 	}
+
+	headers["Content-Length"] = strconv.Itoa(len(finalBody))
 
 	return &HttpResponse{
 		Status:  status,
 		Version: version,
 		Headers: headers,
-		Body:    body,
+		Body:    finalBody,
 	}
 }
 
