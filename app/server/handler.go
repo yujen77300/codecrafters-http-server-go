@@ -45,6 +45,7 @@ func (s *Server) HandleConnection(conn net.Conn) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				fmt.Println("Connection timed out")
 			} else if err == io.EOF {
+				fmt.Println(err)
 				fmt.Println("Client closed connection")
 			} else {
 				fmt.Println("Error reading connection: ", err)
@@ -130,18 +131,35 @@ func (s *Server) route(req *HttpRequest) *HttpResponse {
 		return buildResponse(200, req.Version)
 	} else if strings.HasPrefix(req.URL, "/echo/") {
 		echoStr := strings.TrimPrefix(req.URL, "/echo/")
-		return buildResponseWithBody(200, req.Version, []byte(echoStr), "text/plain")
+
+		acceptEncoding := ""
+		if encoding, exists := req.Headers["Accept-Encoding"]; exists {
+			acceptEncoding = encoding
+		}
+
+		return buildResponseWithBody(200, req.Version, []byte(echoStr), "text/plain", acceptEncoding)
 	} else if req.URL == "/user-agent" {
 		userAgent, exists := req.Headers["User-Agent"]
 		if !exists {
 			return buildResponse(400, req.Version)
 		}
-		return buildResponseWithBody(200, req.Version, []byte(userAgent), "text/plain")
+
+		acceptEncoding := ""
+		if encoding, exists := req.Headers["Accept-Encoding"]; exists {
+			acceptEncoding = encoding
+		}
+
+		return buildResponseWithBody(200, req.Version, []byte(userAgent), "text/plain", acceptEncoding)
 	} else if strings.HasPrefix(req.URL, "/files/") {
 		fileName := strings.TrimPrefix(req.URL, "/files/")
 
+		acceptEncoding := ""
+		if encoding, exists := req.Headers["Accept-Encoding"]; exists {
+			acceptEncoding = encoding
+		}
+
 		if req.Method == "GET" {
-			return s.handleGetFile(fileName, req.Version)
+			return s.handleGetFile(fileName, req.Version, acceptEncoding)
 		} else if req.Method == "POST" {
 			return s.handlePostFile(fileName, req.Body, req.Version)
 		}
@@ -159,10 +177,13 @@ func buildResponse(status int, version string) *HttpResponse {
 	}
 }
 
-func buildResponseWithBody(status int, version string, body []byte, contentType string) *HttpResponse {
+func buildResponseWithBody(status int, version string, body []byte, contentType string, acceptEncoding string) *HttpResponse {
 	headers := make(map[string]string)
 	headers["Content-Type"] = contentType
 	headers["Content-Length"] = strconv.Itoa(len(body))
+	if acceptEncoding != "" && strings.Contains(strings.ToLower(acceptEncoding), "gzip") {
+		headers["Content-Encoding"] = "gzip"
+	}
 
 	return &HttpResponse{
 		Status:  status,
@@ -172,7 +193,7 @@ func buildResponseWithBody(status int, version string, body []byte, contentType 
 	}
 }
 
-func (s *Server) handleGetFile(fileName string, version string) *HttpResponse {
+func (s *Server) handleGetFile(fileName string, version string, acceptEncoding string) *HttpResponse {
 	filePath := filepath.Join(s.fileDirctory, fileName)
 
 	_, err := os.Stat(filePath)
@@ -192,7 +213,7 @@ func (s *Server) handleGetFile(fileName string, version string) *HttpResponse {
 	}
 
 	fmt.Printf("File response sent: %s (%d bytes)\n", fileName, len(content))
-	return buildResponseWithBody(200, version, content, "application/octet-stream")
+	return buildResponseWithBody(200, version, content, "application/octet-stream", acceptEncoding)
 }
 
 func (s *Server) handlePostFile(fileName string, requestBody string, version string) *HttpResponse {
